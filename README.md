@@ -24,8 +24,8 @@ For most using kubernetes comes in the following stages of agony
 
 ## Images
 
-Exec into Pod
+Pod action menu system using fzf
 ![alt text](https://github.com/TonyTromp/kubefzf/blob/main/images/exec_pod.png?raw=true)
 
-Port Forward
+Service Port Forwarding
 ![alt text](https://github.com/TonyTromp/kubefzf/blob/main/images/port-forward.png?raw=true)
