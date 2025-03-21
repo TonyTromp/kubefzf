@@ -1,6 +1,6 @@
 # kubefzf
 
-![alt text](https://github.com/TonyTromp/kubefzf/blob/main/images/overview.png?raw=true)
+![overview]](https://github.com/TonyTromp/kubefzf/blob/main/images/overview.png?raw=true)
 
 
 A fuzzyfind (fzf) menu system that replaces or improves most of your daily kubernetes interactions.
@@ -22,3 +22,10 @@ For most using kubernetes comes in the following stages of agony
 - podadmin: shows all pods in your current namespace: exec, view logs, describe, set pod image, restart, delete.
 - svcadmin: shows all services in your current namespace: port forward, edit service, describe, view endpoints.
 
+## Images
+
+Exec into Pod
+![alt text](https://github.com/TonyTromp/kubefzf/blob/main/images/exec_pod.png?raw=true)
+
+Port Forward
+![alt text](https://github.com/TonyTromp/kubefzf/blob/main/images/port-forward.png?raw=true)
