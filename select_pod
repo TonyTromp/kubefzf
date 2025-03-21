@@ -1,0 +1,3 @@
+  #!/bin/bash
+  
+  selected_pod=$(printf '%s\n' "${options[@]}" | fzf --select=1)

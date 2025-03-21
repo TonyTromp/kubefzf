@@ -1,0 +1,209 @@
+#!/bin/bash
+
+# Declare pod_data as global variable (removing -g flag)
+pod_data=""
+
+# Define and export the function so it's available to fzf subshells
+get_pod_json() {
+    local pod_name="$1"
+    echo "$POD_DATA" | jq -r ".items[] | select(.metadata.name == \"$pod_name\")" | jq "del(.metadata.managedFields)"
+}
+export -f get_pod_json
+
+# Export function definition for zsh compatibility
+export BASH_FUNCTIONS="$(declare -f get_pod_json)"
+
+select_pod() {
+    # Store pod data in JSON format globally
+    pod_data=$(kubectl get pods -o json)
+    export POD_DATA="$pod_data"
+    
+    # Extract pod names using jq, sort in reverse order, and pipe to fzf
+    echo "$pod_data" | \
+        jq -r '.items[].metadata.name' | \
+        sort -r | \
+        fzf --height=80% \
+            --preview 'echo "$POD_DATA" | jq -r --arg name {} ".items[] | select(.metadata.name == \$name)" | jq "del(.metadata.managedFields)"' \
+            --preview-window=right:70%:wrap \
+            --prompt="Select pod > " \
+            --bind "ctrl-d:change-preview(kubectl describe pod {})" \
+            --bind 'ctrl-y:change-preview(echo "$POD_DATA" | jq -r --arg name {} ".items[] | select(.metadata.name == \$name)" | jq "del(.metadata.managedFields)")' \
+            --bind 'ctrl-u:preview-up,ctrl-e:preview-down' \
+            --bind 'ctrl-f:preview-page-down,ctrl-b:preview-page-up' \
+            --header 'CTRL-D: describe pod / CTRL-Y: JSON view CTRL-U/E: scroll preview up/down | 
+            CTRL-F/B: page down/up'
+}
+
+show_action_menu() {
+    local selected_pod="$1"
+    
+    # Use fzf to select an action with preview
+    selected_action=$(printf '%s\n' \
+        "1. Exec into pod" \
+        "2. View logs" \
+        "3. View logs by labels" \
+        "4. Restart pod" \
+        "5. Describe pod" \
+        "6. Select different pod" \
+        "7. Set pod image" \
+        "8. Rollout restart deployment" \
+        "9. View connected services" \
+        "10. Delete pod" \
+        "11. Return to menu" \
+        | fzf --height=80% \
+            --tac \
+            --preview 'case {} in
+                "1. Exec into pod") echo "Open an interactive shell inside the pod container";;
+                "2. View logs") echo "Stream the pod logs in follow mode (-f)";;
+                "3. View logs by labels") echo "View logs from all pods matching this pod'\''s labels";;
+                "4. Restart pod") echo "Delete the pod, causing it to be recreated by its controller";;
+                "5. Describe pod") echo "Show detailed information about the pod";;
+                "6. Select different pod") echo "Go back to pod selection menu";;
+                "7. Set pod image") echo "Change the image of the pod'\''s container";;
+                "8. Rollout restart deployment") echo "Restart the deployment that owns this pod";;
+                "9. View connected services") echo "List services connected to the pod";;
+                "10. Delete pod") echo -e "\033[1;31mWARNING: This will permanently delete the pod\033[0m";;
+                "11. Return to menu") echo "Return to the main menu";;
+                *) echo "";;
+            esac' \
+            --preview-window=right:70%:wrap \
+            --prompt="Select action for $selected_pod > ")
+
+    # Return if no action selected
+    if [[ -z "$selected_action" ]]; then
+        return 1
+    fi
+
+    case "$selected_action" in
+        "1. Exec into pod")
+            read -r -p "Enter command to execute [/bin/bash]: " cmd
+            cmd=${cmd:-/bin/bash}
+            kubectl exec -it "$selected_pod" -- "$cmd"
+            ;;
+        "2. View logs")
+            echo "Logs for pod: $selected_pod"
+            kubectl logs -f "$selected_pod"
+            ;;
+        "3. View logs by labels")
+            # Get all labels from the selected pod
+            labels=$(kubectl get pod "$selected_pod" -o jsonpath='{.metadata.labels}' | jq -r 'to_entries | map("\(.key)=\(.value)") | join(",")')
+            if [[ -n "$labels" ]]; then
+                echo "Viewing logs for pods with labels: $labels"
+                kubectl logs -l "$labels" -f --all-containers
+            else
+                echo "No labels found on pod $selected_pod"
+                read -n 1 -p "Press any key to continue..."
+            fi
+            ;;
+        "4. Restart pod")
+            echo -e "\n\033[1;34mThis action restarts $selected_pod.\033[0m"
+            read -r -p "Enter 'yes' to proceed: " confirmation
+            if [[ $confirmation == "yes" ]]; then
+                kubectl delete pod "$selected_pod"
+                echo "Restarted pod: $selected_pod"
+                echo "Press any key to continue..."
+                read -n 1
+            fi
+            ;;
+        "5. Describe pod")
+            kubectl describe pod "$selected_pod" | less
+            ;;
+        "6. Select different pod")
+            selected_pod=$(select_pod)
+            if [[ -z "$selected_pod" ]]; then
+                echo "No pod selected. Exiting."
+                exit 1
+            fi
+            continue
+            ;;
+        "7. Set pod image")
+            current_image=$(kubectl get pod "$selected_pod" -o jsonpath='{.spec.containers[0].image}')
+            echo "Current image: $current_image"
+            read -r -p "Enter new image [default: $current_image]: " new_image
+            new_image=${new_image:-$current_image}
+            kubectl set image pod/"$selected_pod" "$selected_pod"="$new_image"
+            echo "Image updated to: $new_image"
+            ;;
+        "8. Rollout restart deployment")
+            # Get the deployment name from pod labels
+            deployment=$(kubectl get pod "$selected_pod" -o jsonpath='{.metadata.labels.app}')
+            if [[ -z "$deployment" ]]; then
+                # Try another common label if app is not found
+                deployment=$(kubectl get pod "$selected_pod" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/name}')
+            fi
+            
+            if [[ -z "$deployment" ]]; then
+                echo "Could not find associated deployment. Please check pod labels."
+                read -n 1 -p "Press any key to continue..."
+            else
+                echo -e "\n\033[1;34mThis will restart deployment: $deployment\033[0m"
+                read -r -p "Enter 'yes' to proceed: " confirmation
+                if [[ $confirmation == "yes" ]]; then
+                    kubectl rollout restart deployment/"$deployment"
+                    echo "Deployment restart initiated"
+                    echo "Waiting for rollout to complete..."
+                    kubectl rollout status deployment/"$deployment"
+                    echo "Press any key to continue..."
+                    read -n 1
+                fi
+            fi
+            ;;
+        "9. View connected services")
+            echo "Services connected to pod: $selected_pod"
+            # Get app label from pod
+            app_label=$(kubectl get pod "$selected_pod" -o jsonpath='{.metadata.labels.app}')
+            if [[ -z "$app_label" ]]; then
+                # Try alternate app label format if first one not found
+                app_label=$(kubectl get pod "$selected_pod" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/name}')
+            fi
+            
+            if [[ -n "$app_label" ]]; then
+                echo "Looking for services with label: app=$app_label"
+                kubectl get services -l "app=$app_label" -o custom-columns="NAME:.metadata.name,TYPE:.spec.type,CLUSTER-IP:.spec.clusterIP,EXTERNAL-IP:.spec.externalIP,PORTS:.spec.ports[*].port"
+                
+                # Also try alternate label format
+                echo -e "\nChecking alternate label format..."
+                kubectl get services -l "app.kubernetes.io/name=$app_label" -o custom-columns="NAME:.metadata.name,TYPE:.spec.type,CLUSTER-IP:.spec.clusterIP,EXTERNAL-IP:.spec.externalIP,PORTS:.spec.ports[*].port"
+            else
+                echo "No app label found on pod"
+            fi
+            echo "Press any key to continue..."
+            read -n 1
+            ;;
+        "10. Delete pod")
+            echo -e "\n\033[1;31mAre you sure you want to delete $selected_pod? This operation cannot be undone.\033[0m"
+            read -r -p "Enter 'yes' to proceed: " confirmation
+            if [[ $confirmation == "yes" ]]; then
+                kubectl delete pod "$selected_pod"
+                echo "Pod deleted successfully."
+                return 0  # Exit only after successful deletion
+            else
+                echo "Delete cancelled"
+                return 1
+            fi
+            ;;
+        "11. Return to menu")
+            selected_pod=$(select_pod)
+            if [[ -z "$selected_pod" ]]; then
+                echo "No pod selected. Exiting."
+                return 1
+            fi
+            return 0
+            ;;
+    esac
+}
+
+# Initial pod selection
+selected_pod=$(select_pod)
+
+if [[ -z "$selected_pod" ]]; then
+    echo "No pod selected. Exiting."
+    exit 1
+fi
+
+# Main loop
+while true; do
+    if ! show_action_menu "$selected_pod"; then
+        exit 0
+    fi
+done

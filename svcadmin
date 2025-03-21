@@ -1,0 +1,142 @@
+#!/bin/bash
+
+# Add this global variable at the beginning
+SERVICES_DATA=""
+
+# Define and export the function so it's available to fzf subshells
+preview_service() {
+    local name="$1"
+    echo "$SERVICES_DATA" | jq -r --arg name "$name" '.items[] | select(.metadata.name == $name) | del(.metadata.managedFields)'
+}
+export -f preview_service
+
+# No need for BASH_FUNCTIONS export, just export the function directly
+list_services() {
+    # Get all services data at once in JSON format
+    SERVICES_DATA=$(kubectl get services -o json)
+    export SERVICES_DATA
+    
+    # Extract service names, sort them in reverse order, and pipe to fzf
+    echo "$SERVICES_DATA" | \
+        jq -r '.items[] | "\(.metadata.name)"' | sort -r | \
+        fzf --height=80% \
+            --preview "printf '%s' \"\$SERVICES_DATA\" | jq -r --arg name {1} '.items[] | select(.metadata.name == \$name) | del(.metadata.managedFields)'" \
+            --preview-window=right:70%:wrap \
+            --prompt="Select service > " \
+            --bind "ctrl-d:change-preview(kubectl describe service {1})" \
+            --bind "ctrl-y:change-preview(printf '%s' \"\$SERVICES_DATA\" | jq -r --arg name {1} '.items[] | select(.metadata.name == \$name) | del(.metadata.managedFields)')" \
+            --bind 'ctrl-u:preview-up,ctrl-e:preview-down' \
+            --bind 'ctrl-f:preview-page-down,ctrl-b:preview-page-up' \
+            --header "CTRL-D: describe service / CTRL-Y: JSON view
+CTRL-U/E: scroll preview up/down | CTRL-F/B: page down/up"
+}
+
+select_port() {
+    local service_name=$1
+    # Get ports from the service
+    ports=$(kubectl get service "$service_name" -o jsonpath='{.spec.ports[*].port}')
+    
+    # Convert space-separated ports to array
+    IFS=' ' read -ra port_array <<< "$ports"
+    
+    # Display ports using fzf
+    printf '%s\n' "${port_array[@]}" | \
+        fzf --height=80% \
+            --preview "echo 'Forward port {} to localhost:{}'" \
+            --preview-window=right:70%:wrap \
+            --prompt="Select port to forward > " \
+            --header "Select a port to forward to localhost"
+}
+
+while true; do
+    # First select a service
+    selected_service=$(list_services)
+    
+    # Exit if no service selected (e.g., if user pressed ESC)
+    if [[ -z "$selected_service" ]]; then
+        exit 0
+    fi
+    
+    service_name=$(echo "$selected_service" | awk '{print $1}')
+    
+    # Then show actions menu for the selected service
+    selected_action=$(printf '%s\n' \
+        "[1] Port forward" \
+        "[2] Edit service" \
+        "[3] Change Editor" \
+        "[4] Describe service" \
+        "[5] View service endpoints" \
+        | fzf --height=80% \
+            --tac \
+            --preview 'case {} in
+                "[1] Port forward") echo "Forward a service port to localhost";;
+                "[2] Edit service") echo "Edit service configuration in your default editor";;
+                "[3] Change Editor") echo "Select preferred editor: vim, nano, vscode, or cursor";;
+                "[4] Describe service") echo "Show detailed information about $service_name";;
+                "[5] View service endpoints") echo "Show the endpoints (pods) that $service_name is routing traffic to";;
+                *) echo "";;
+            esac' \
+            --preview-window=right:70%:wrap \
+            --prompt="Select action for $service_name > ")
+
+    # Exit if no action selected (e.g., if user pressed ESC)
+    if [[ -z "$selected_action" ]]; then
+        continue
+    fi
+
+    case "$selected_action" in
+        "[1] Port forward")
+            selected_port=$(select_port "$service_name")
+            if [[ -n "$selected_port" ]]; then
+                echo "Forwarding port $selected_port from $service_name to localhost:$selected_port"
+                echo "Press Ctrl+C to stop port forwarding"
+                kubectl port-forward "svc/$service_name" "$selected_port:$selected_port"
+            fi
+            ;;
+        "[2] Edit service")
+            echo "Opening service configuration in your default editor..."
+            echo "Save and close the editor to apply changes"
+            kubectl edit service "$service_name"
+            ;;
+        "[3] Change Editor")
+            editor_choice=$(printf '%s\n' \
+                "vim" \
+                "nano" \
+                "vscode" \
+                "cursor" \
+                | fzf --height=80% \
+                    --preview 'case {} in
+                        vim) echo "Use vim terminal editor";;
+                        nano) echo "Use nano terminal editor";;
+                        vscode) echo "Use Visual Studio Code";;
+                        cursor) echo "Use Cursor Editor";;
+                        *) echo "";;
+                    esac' \
+                    --preview-window=right:70%:wrap \
+                    --prompt="Select editor > ")
+            
+            if [[ -n "$editor_choice" ]]; then
+                case "$editor_choice" in
+                    "vscode")
+                        export KUBE_EDITOR="code -w"
+                        ;;
+                    "cursor")
+                        export KUBE_EDITOR="cursor -w"
+                        ;;
+                    *)
+                        export KUBE_EDITOR="$editor_choice"
+                        ;;
+                esac
+                echo "Editor changed to: $editor_choice"
+                read -n 1 -p "Press any key to continue..."
+            fi
+            ;;
+        "[4] Describe service")
+            kubectl describe service "$service_name" | less
+            ;;
+        "[5] View service endpoints")
+            echo "Endpoints for service: $service_name"
+            kubectl get endpoints "$service_name" -o yaml | less
+            ;;
+    esac
+done
