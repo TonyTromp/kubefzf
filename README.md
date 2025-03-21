@@ -1,5 +1,8 @@
 # kubefzf
 
+![alt text](https://github.com/TonyTromp/kubefzf/blob/main/overview.png?raw=true)
+
+
 A fuzzyfind (fzf) menu system that replaces or improves most of your daily kubernetes interactions.
 
 ## Why
