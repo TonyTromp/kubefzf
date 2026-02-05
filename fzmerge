@@ -1,0 +1,71 @@
+#!/bin/bash
+
+# Function to get and display branches using fzf
+select_branch() {
+    local prompt_text="$1"
+    local title_text="$2"
+    
+    # Get all local branches, remove the '*' marker, trim whitespace, and sort in reverse
+    git branch | \
+        awk '{print $NF}' | \
+        sort -r | \
+        fzf --height=80% \
+            --prompt="$prompt_text > " \
+            --header="$title_text"
+}
+
+# Select source branch (branch to merge FROM)
+source_branch=$(select_branch "Merge Source" "Merge Source")
+
+# Exit if no source branch selected
+if [[ -z "$source_branch" ]]; then
+    echo "No source branch selected. Exiting."
+    exit 1
+fi
+
+# Select destination branch (branch to merge INTO)
+destination_branch=$(select_branch "Merge Destination" "Merge Destination")
+
+# Exit if no destination branch selected
+if [[ -z "$destination_branch" ]]; then
+    echo "No destination branch selected. Exiting."
+    exit 1
+fi
+
+# Exit if source and destination are the same branch
+if [[ "$source_branch" == "$destination_branch" ]]; then
+    echo "Source and destination branches are the same ('$source_branch'). Exiting."
+    exit 1
+fi
+
+# Checkout destination branch
+echo "Checking out destination branch: $destination_branch"
+if ! git checkout "$destination_branch"; then
+    echo "Error: Failed to checkout branch '$destination_branch'"
+    exit 1
+fi
+
+# Pull latest changes
+echo "Pulling latest changes for '$destination_branch'..."
+if ! git pull; then
+    echo "Error: Failed to pull latest changes for '$destination_branch'"
+    exit 1
+fi
+
+# Confirmation prompt
+echo ""
+read -r -p "Merge '$source_branch' into '$destination_branch'? (y/n): " confirmation
+
+if [[ "$confirmation" != "y" && "$confirmation" != "Y" ]]; then
+    echo "Merge cancelled."
+    exit 0
+fi
+
+# Perform merge
+echo "Merging '$source_branch' into '$destination_branch'..."
+if ! git merge "$source_branch"; then
+    echo "Error: Merge failed. Please resolve conflicts and try again."
+    exit 1
+fi
+
+echo "Merge completed successfully!"
