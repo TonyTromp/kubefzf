@@ -1,0 +1,65 @@
+#!/bin/bash
+
+# Function to get and display branches using fzf
+select_branch() {
+    local prompt_text="$1"
+    local title_text="$2"
+    
+    # Get all local branches, remove the '*' marker, trim whitespace, and sort in reverse
+    git branch | \
+        awk '{print $NF}' | \
+        sort -r | \
+        fzf --height=80% \
+            --prompt="$prompt_text > " \
+            --header="$title_text"
+}
+
+# Function to select a file from a specific branch
+select_file_from_branch() {
+    local branch="$1"
+    
+    # Get all tracked files from the branch recursively
+    git ls-tree -r --name-only "$branch" | \
+        sort | \
+        fzf --height=80% \
+            --preview "git show $branch:{}" \
+            --preview-window=right:70%:wrap \
+            --prompt="Select file > " \
+            --header="Select File from $branch"
+}
+
+# Select source branch (branch to import FROM)
+source_branch=$(select_branch "Select branch" "Select Branch")
+
+# Exit if no branch selected
+if [[ -z "$source_branch" ]]; then
+    echo "No branch selected. Exiting."
+    exit 1
+fi
+
+# Select file from the source branch
+selected_file=$(select_file_from_branch "$source_branch")
+
+# Exit if no file selected
+if [[ -z "$selected_file" ]]; then
+    echo "No file selected. Exiting."
+    exit 1
+fi
+
+# Confirmation prompt
+echo ""
+read -r -p "Import '$selected_file' from '$source_branch' into current branch? (y/n): " confirmation
+
+if [[ "$confirmation" != "y" && "$confirmation" != "Y" ]]; then
+    echo "Import cancelled."
+    exit 0
+fi
+
+# Import file using git checkout
+echo "Importing '$selected_file' from '$source_branch'..."
+if ! git checkout "$source_branch" -- "$selected_file"; then
+    echo "Error: Failed to import file '$selected_file' from branch '$source_branch'"
+    exit 1
+fi
+
+echo "File imported successfully!"
