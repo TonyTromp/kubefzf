@@ -4,18 +4,25 @@
 select_branch() {
     local prompt_text="$1"
     local title_text="$2"
+    local query="$3"
     
     # Get all local branches, remove the '*' marker, trim whitespace, and sort in reverse
+    local fzf_args=(--height=80% --prompt="$prompt_text > " --header="$title_text")
+    if [[ -n "$query" ]]; then
+        fzf_args+=(--query="$query")
+    fi
+    
     git branch | \
         awk '{print $NF}' | \
         sort -r | \
-        fzf --height=80% \
-            --prompt="$prompt_text > " \
-            --header="$title_text"
+        fzf "${fzf_args[@]}"
 }
 
-# Select source branch (branch to merge FROM)
-source_branch=$(select_branch "Merge Source" "Merge Source")
+# Get current branch name
+current_branch=$(git branch --show-current)
+
+# Select source branch (branch to merge FROM) with current branch as default query
+source_branch=$(select_branch "Merge Source" "Merge Source" "$current_branch")
 
 # Exit if no source branch selected
 if [[ -z "$source_branch" ]]; then
