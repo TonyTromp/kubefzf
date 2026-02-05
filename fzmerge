@@ -69,3 +69,12 @@ if ! git merge "$source_branch"; then
 fi
 
 echo "Merge completed successfully!"
+
+# Push changes to remote
+echo "Pushing changes to remote..."
+if ! git push; then
+    echo "Error: Failed to push changes to remote."
+    exit 1
+fi
+
+echo "Push completed successfully!"
